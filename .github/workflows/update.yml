@@ -1,0 +1,57 @@
+name: Update formulas
+
+# Follows velmux's releases: when there's a newer one than the formula's, the
+# formula is regenerated from its checksums and committed here. No tokens for
+# other repos needed: it only reads public releases and pushes to this repo.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  velmux:
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.latest.outputs.tag != steps.latest.outputs.current }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo vincentvella/velmux --json tagName -q .tagName)
+          current=$(sed -n 's/^  version "\(.*\)"/v\1/p' Formula/velmux.rb 2>/dev/null || true)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest $tag, formula ${current:-none}"
+      - name: Regenerate
+        if: steps.latest.outputs.tag != steps.latest.outputs.current
+        run: bin/velmux-formula "${{ steps.latest.outputs.tag }}"
+      - name: Commit
+        if: steps.latest.outputs.tag != steps.latest.outputs.current
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/velmux.rb
+          git commit -m "velmux ${{ steps.latest.outputs.tag }}"
+          git push
+
+  # Install the formula for real when it changed (or on a manual run).
+  audit:
+    needs: velmux
+    if: needs.velmux.outputs.updated == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Install and test
+        run: |
+          brew tap vincentvella/tap "$PWD"
+          brew install --formula vincentvella/tap/velmux
+          brew test vincentvella/tap/velmux
